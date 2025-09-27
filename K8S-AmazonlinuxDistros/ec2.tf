@@ -1,24 +1,20 @@
-# configured aws provider with proper credentials
+# Configure AWS provider with proper credentials
 provider "aws" {
-  region  = "us-east-1"
-  profile = "yusuf"
+  region  = "us-west-1"
+  profile = "asher"
 }
 
-
-# create default vpc if one does not exit
+# Create default VPC if one does not exist
 resource "aws_default_vpc" "default_vpc" {
-
   tags = {
     Name = "default vpc"
   }
 }
 
-
-# use data source to get all avalablility zones in region
+# Get all availability zones in the region
 data "aws_availability_zones" "available_zones" {}
 
-
-# create default subnet if one does not exit
+# Create default subnet if one does not exist
 resource "aws_default_subnet" "default_az1" {
   availability_zone = data.aws_availability_zones.available_zones.names[0]
 
@@ -27,12 +23,11 @@ resource "aws_default_subnet" "default_az1" {
   }
 }
 
-
-# create security group for the ec2 instance
+# Create security group for the EC2 instances
 resource "aws_security_group" "ec2_security_group6" {
-  name        = "ec2 security group6"
+  name        = "ec2-security-group6"
   description = "allow access on required ports"
-  vpc_id      = resource.aws_default_vpc.default_vpc.id
+  vpc_id      = aws_default_vpc.default_vpc.id  # ✅ fixed reference
 
   ingress {
     description = "http access"
@@ -43,7 +38,7 @@ resource "aws_security_group" "ec2_security_group6" {
   }
 
   ingress {
-    description = "k8s access"
+    description = "k8s all traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -51,7 +46,7 @@ resource "aws_security_group" "ec2_security_group6" {
   }
 
   ingress {
-    description = "k8s1 access"
+    description = "k8s kubelet"
     from_port   = 10250
     to_port     = 10250
     protocol    = "tcp"
@@ -59,7 +54,7 @@ resource "aws_security_group" "ec2_security_group6" {
   }
 
   ingress {
-    description = "k8s2 access"
+    description = "k8s api server"
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
@@ -67,7 +62,7 @@ resource "aws_security_group" "ec2_security_group6" {
   }
 
   ingress {
-    description = "k8s3 access"
+    description = "nodeport"
     from_port   = 31111
     to_port     = 31111
     protocol    = "tcp"
@@ -93,68 +88,44 @@ resource "aws_security_group" "ec2_security_group6" {
   egress {
     from_port   = 0
     to_port     = 0
-    protocol    = -1
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = {
-    Name = "k8s server sg"
+    Name = "k8s-server-sg"
   }
 }
 
-
-# use data source to get a registered amazon linux 2 ami
+# Use data source to get the latest Amazon Linux 2 AMI
 data "aws_ami" "amazon_linux_2" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
-    name   = "owner-alias"
-    values = ["amazon"]
-  }
-
-  filter {
     name   = "name"
-    values = ["amzn2-ami-hvm*"]
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
   }
 }
 
-# launch the ec2 instance
+# Launch EC2 instances with user_data script
 resource "aws_instance" "ec2_instance" {
   ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = "t2.medium"
+  instance_type          = "t3.medium"
   subnet_id              = aws_default_subnet.default_az1.id
   vpc_security_group_ids = [aws_security_group.ec2_security_group6.id]
-  key_name               = "devopskeypair"
+  key_name               = "deployment"
   count                  = 3
 
   tags = {
-    Name = "kubernetes server"
+    Name = "kubernetes-server-${count.index + 1}"
   }
 
-  connection {
-    type        = "ssh"
-    user        = "ec2-user"
-    private_key = file("~/Downloads/devopskeypair.pem")
-    host = self.public_ip
-
-
+  # Run install_k8s.sh at instance boot
+  user_data = file("${path.module}/install_k8s.sh")  # ✅ replaces provisioners
 }
 
-  provisioner "file" {
-    source      = "install_k8s.sh"
-    destination = "/tmp/install_k8s.sh"
-
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-        "sudo chmod +x /tmp/install_k8s.sh",
-        "sudo su -c'bash /tmp/install_k8s.sh'",
-    ]
-  }
-}
-# print the url of the container
-output "container_url" {
- value = ["${aws_instance.ec2_instance.*.public_ip}"]
+# Print the public IPs of the EC2 instances
+output "container_urls" {
+  value = aws_instance.ec2_instance[*].public_ip
 }
